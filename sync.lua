@@ -1,7 +1,7 @@
 -- sync.lua (v7.56-combat-only)
 addon.name    = 'sync'
 addon.author  = 'aryl'
-addon.version = '7.56-combat-only'
+addon.version = '7.56'
 addon.desc    = 'Zone-safe Engage/Follow sync'
 
 require('common')
@@ -286,4 +286,5 @@ ashita.events.register('load', 'sync_load', function()
     qcmd('/ms followme on')
 
 end)
+
 
