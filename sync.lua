@@ -2,7 +2,7 @@
 addon.name    = 'sync'
 addon.author  = 'aryl'
 addon.version = '7.56-combat-only'
-addon.desc    = 'Zone-safe Engage/Follow sync addon with per-mule Haste Samba (TP+buffID+cooldown), Box Step (TP+cooldown), Quick Step, immediate disengage (with safeguard), retry (safe), CPU-optimized out-of-zone skipping. Auto /ms followme on upon load.'
+addon.desc    = 'Zone-safe Engage/Follow sync'
 
 require('common')
 local imgui = require('imgui')
@@ -286,3 +286,4 @@ ashita.events.register('load', 'sync_load', function()
     qcmd('/ms followme on')
 
 end)
+
