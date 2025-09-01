@@ -23,7 +23,7 @@ local RETRY_DELAY = 0.7
 
 local chars = {
     {
-        name = 'muunch',
+        name = '',
         engage = true, follow = true,
         hs_enabled = false, bs_enabled = false, qs_enabled = false,
         lastTarget = 0, engaged = false, lastEngageTime = 0, currentFollowState = nil,
@@ -31,7 +31,7 @@ local chars = {
         hs_lastcast = -HS_COOLDOWN, bs_lastcast = -STEP_COOLDOWN, qs_lastcast = -STEP_COOLDOWN
     },
     {
-        name = 'slowpoke',
+        name = '',
         engage = true, follow = true,
         hs_enabled = false, bs_enabled = false, qs_enabled = false,
         lastTarget = 0, engaged = false, lastEngageTime = 0, currentFollowState = nil,
@@ -284,4 +284,5 @@ end)
 ------------------------------------------------------------
 ashita.events.register('load', 'sync_load', function()
     qcmd('/ms followme on')
+
 end)
