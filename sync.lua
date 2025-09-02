@@ -1,4 +1,4 @@
--- sync.lua (v7.56-combat-only)
+-- sync
 addon.name    = 'sync'
 addon.author  = 'aryl'
 addon.version = '7.56'
@@ -24,7 +24,7 @@ local RETRY_DELAY = 0.7
 local chars = {
     {
         name = '',
-        engage = true, follow = true,
+        engage = false, follow = true,
         hs_enabled = false, bs_enabled = false, qs_enabled = false,
         lastTarget = 0, engaged = false, lastEngageTime = 0, currentFollowState = nil,
         partyIndex = nil, retry = nil,
@@ -32,7 +32,15 @@ local chars = {
     },
     {
         name = '',
-        engage = true, follow = true,
+        engage = false, follow = true,
+        hs_enabled = false, bs_enabled = false, qs_enabled = false,
+        lastTarget = 0, engaged = false, lastEngageTime = 0, currentFollowState = nil,
+        partyIndex = nil, retry = nil,
+        hs_lastcast = -HS_COOLDOWN, bs_lastcast = -STEP_COOLDOWN, qs_lastcast = -STEP_COOLDOWN
+    },
+	{
+        name = '',
+        engage = false, follow = true,
         hs_enabled = false, bs_enabled = false, qs_enabled = false,
         lastTarget = 0, engaged = false, lastEngageTime = 0, currentFollowState = nil,
         partyIndex = nil, retry = nil,
@@ -286,5 +294,3 @@ ashita.events.register('load', 'sync_load', function()
     qcmd('/ms followme on')
 
 end)
-
-
