@@ -1,8 +1,8 @@
 -- sync
 addon.name    = 'sync'
 addon.author  = 'aryl'
-addon.version = '7.56'
-addon.desc    = 'Zone-safe Engage/Follow sync'
+addon.version = '7.58'
+addon.desc    = 'Alliance-safe Engage/Follow sync'
 
 require('common')
 local imgui = require('imgui')
@@ -23,7 +23,7 @@ local RETRY_DELAY = 0.7
 
 local chars = {
     {
-        name = '',
+        name = 'muunch',
         engage = false, follow = true,
         hs_enabled = false, bs_enabled = false, qs_enabled = false,
         lastTarget = 0, engaged = false, lastEngageTime = 0, currentFollowState = nil,
@@ -31,16 +31,16 @@ local chars = {
         hs_lastcast = -HS_COOLDOWN, bs_lastcast = -STEP_COOLDOWN, qs_lastcast = -STEP_COOLDOWN
     },
     {
-        name = '',
+        name = 'slowpoke',
         engage = false, follow = true,
         hs_enabled = false, bs_enabled = false, qs_enabled = false,
         lastTarget = 0, engaged = false, lastEngageTime = 0, currentFollowState = nil,
         partyIndex = nil, retry = nil,
         hs_lastcast = -HS_COOLDOWN, bs_lastcast = -STEP_COOLDOWN, qs_lastcast = -STEP_COOLDOWN
     },
-	{
-        name = '',
-        engage = false, follow = true,
+    {
+        name = 'goomy',
+        engage = false, follow = false,
         hs_enabled = false, bs_enabled = false, qs_enabled = false,
         lastTarget = 0, engaged = false, lastEngageTime = 0, currentFollowState = nil,
         partyIndex = nil, retry = nil,
@@ -60,7 +60,6 @@ end
 
 -- Safe disengage: only sends /attack off if mule is actually engaged
 local function disengage(c)
-    -- Out-of-zone or partyIndex nil: just reset state
     if not c.partyIndex then
         c.lastTarget = 0
         c.engaged = false
@@ -90,7 +89,6 @@ local function disengage(c)
         end
     end
 
-    -- Always reset local state
     c.lastTarget = 0
     c.engaged = false
     c.lastEngageTime = 0
@@ -119,10 +117,11 @@ local function getPlayerInfo()
     return { status = status, target = target }
 end
 
+-- Alliance-aware: search all 18 slots
 local function updatePartyIndex(c)
     local party = mm:GetParty()
     if not party then return nil end
-    for idx = 0, 5 do
+    for idx = 0, 17 do
         local member = party:GetMemberName(idx)
         if member and member:lower() == c.name:lower() then
             return idx
@@ -157,11 +156,15 @@ end
 local function handleAction(c, ability, enabledFlag, tpThreshold, lastcastField, checkBuff)
     if enabledFlag and c.engaged then
         local party = mm:GetParty()
-        if not party then return end
-        local muleTP = party:GetMemberTP(c.partyIndex)
+        if not party or not c.partyIndex then return end
+
+        local muleTP = 0
+        local ok, tp = pcall(function() return party:GetMemberTP(c.partyIndex) end)
+        muleTP = (ok and tp) or 0
+
         local last = c[lastcastField] or -STEP_COOLDOWN
         local now = os.clock()
-        if muleTP and muleTP >= tpThreshold and (now - last) >= (ability == "Haste Samba" and HS_COOLDOWN or STEP_COOLDOWN) then
+        if muleTP >= tpThreshold and (now - last) >= (ability == "Haste Samba" and HS_COOLDOWN or STEP_COOLDOWN) then
             if ability == "Haste Samba" and checkBuff and hasBuff(370, c.partyIndex) then return end
             local cmd = string.format('/mst %s /ja "%s" <t>', c.name, ability)
             if ability == "Haste Samba" then cmd = string.format('/mst %s /ja "%s" <me>', c.name, ability) end
@@ -192,17 +195,16 @@ ashita.events.register('d3d_present', 'sync_main_loop', function()
 
         setFollow(c, c.follow)
 
-        -- Master disengaged -> force mule disengage
         if not playerEngaged then
             disengage(c)
         end
 
-        -- Engage logic
         if playerEngaged and c.engage then
             local masterTargetValid = playerTarget ~= 0
             local lostTarget = c.lastTarget ~= playerTarget
             local now = os.clock()
             if (lostTarget and masterTargetValid) or not c.engaged or (now - (c.lastEngageTime or 0) >= LOST_TARGET_INTERVAL) then
+                -- Only queue engage if in same zone (partyIndex valid)
                 local cmd = string.format('/mst %s /attack [t]', c.name)
                 table.insert(engageCommands, cmd)
                 queueRetry(c, cmd)
@@ -215,9 +217,13 @@ ashita.events.register('d3d_present', 'sync_main_loop', function()
             disengage(c)
         end
 
-        -- Only cast abilities if in combat (TP > 0)
         local party = mm:GetParty()
-        local muleTP = party and party:GetMemberTP(c.partyIndex) or 0
+        local muleTP = 0
+        if party and c.partyIndex then
+            local ok, tp = pcall(function() return party:GetMemberTP(c.partyIndex) end)
+            muleTP = (ok and tp) or 0
+        end
+
         local inCombat = muleTP > 0
         if inCombat then
             handleAction(c, "Haste Samba", c.hs_enabled, HS_TP_THRESHOLD, "hs_lastcast", true)
@@ -233,7 +239,6 @@ ashita.events.register('d3d_present', 'sync_main_loop', function()
         qcmd(cmd)
     end
 
-    -- UI
     if ui_open[1] and imgui.Begin('Sync##sync', ui_open, ImGuiWindowFlags_AlwaysAutoResize) then
         for i, c in ipairs(chars) do
             imgui.PushID(i)
@@ -292,5 +297,4 @@ end)
 ------------------------------------------------------------
 ashita.events.register('load', 'sync_load', function()
     qcmd('/ms followme on')
-
 end)
