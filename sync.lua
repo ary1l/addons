@@ -23,7 +23,7 @@ local RETRY_DELAY = 0.7
 
 local chars = {
     {
-        name = 'muunch',
+        name = '',
         engage = false, follow = true,
         hs_enabled = false, bs_enabled = false, qs_enabled = false,
         lastTarget = 0, engaged = false, lastEngageTime = 0, currentFollowState = nil,
@@ -282,4 +282,5 @@ end)
 ashita.events.register('load', 'sync_load', function()
     qcmd('/ms followme on')
 end)
+
 
