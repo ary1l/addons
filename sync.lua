@@ -1,7 +1,7 @@
 -- sync
 addon.name    = 'sync'
 addon.author  = 'aryl'
-addon.version = '7.58'
+addon.version = '7.59'
 addon.desc    = 'Alliance-safe Engage/Follow sync'
 
 require('common')
@@ -170,6 +170,12 @@ ashita.events.register('d3d_present', 'sync_main_loop', function()
     local playerTarget = info.target
     local engageCommands = {}
 
+    -- NEW: get leader HP
+    local party = mm:GetParty()
+    local ent = mm:GetEntity()
+    local selfIdx = party and party:GetMemberTargetIndex(0) or 0
+    local leaderHP = (selfIdx > 0 and ent) and ent:GetHPPercent(selfIdx) or 100
+
     for _, c in ipairs(chars) do
         c.partyIndex = updatePartyIndex(c)
         if not c.partyIndex then
@@ -179,7 +185,8 @@ ashita.events.register('d3d_present', 'sync_main_loop', function()
 
         setFollow(c, c.follow)
 
-        if not playerEngaged then
+        -- Only disengage if leader is alive but disengaged
+        if not playerEngaged and leaderHP > 0 then
             disengage(c)
         end
 
@@ -201,7 +208,6 @@ ashita.events.register('d3d_present', 'sync_main_loop', function()
             disengage(c)
         end
 
-        local party = mm:GetParty()
         local muleTP = 0
         if party and c.partyIndex then
             local ok, tp = pcall(function() return party:GetMemberTP(c.partyIndex) end)
@@ -282,5 +288,3 @@ end)
 ashita.events.register('load', 'sync_load', function()
     qcmd('/ms followme on')
 end)
-
-
