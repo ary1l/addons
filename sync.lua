@@ -1,8 +1,8 @@
 -- sync
 addon.name    = 'sync'
 addon.author  = 'aryl'
-addon.version = '7.59'
-addon.desc    = 'Alliance-safe Engage/Follow sync'
+addon.version = '7.60-optimized-ui-fix'
+addon.desc    = 'Alliance-safe Engage/Follow sync (safe loading, optimized, no UI flicker)'
 
 require('common')
 local imgui = require('imgui')
@@ -14,68 +14,80 @@ local enabled = true
 local ui_open = { true }
 local DEBUG = false
 
-local HS_TP_THRESHOLD = 350
-local HS_COOLDOWN = 62 -- Haste Samba cooldown
+local HS_TP_THRESHOLD   = 350
+local HS_COOLDOWN       = 62       -- Haste Samba cooldown
 local STEP_TP_THRESHOLD = 100
-local STEP_COOLDOWN = 6 -- Box Step / Quick Step cooldown
+local STEP_COOLDOWN     = 6        -- Box Step / Quick Step cooldown
 local LOST_TARGET_INTERVAL = 3.0
-local RETRY_DELAY = 0.7
+local RETRY_DELAY          = 0.7
+local TICK_INTERVAL        = 0.1   -- Main loop throttle (seconds)
+
+local lastTick = 0
 
 local chars = {
     {
-        name = '',
-        engage = false, follow = true,
-        hs_enabled = false, bs_enabled = false, qs_enabled = false,
-        lastTarget = 0, engaged = false, lastEngageTime = 0, currentFollowState = nil,
-        partyIndex = nil, retry = nil,
-        hs_lastcast = -HS_COOLDOWN, bs_lastcast = -STEP_COOLDOWN, qs_lastcast = -STEP_COOLDOWN
+        name='muunch',
+        engage=false,
+        follow=false,
+        hs_enabled=false,
+        bs_enabled=false,
+        qs_enabled=false,
+        lastTarget=0,
+        engaged=false,
+        lastEngageTime=0,
+        currentFollowState=nil,
+        partyIndex=nil,
+        retry=nil,
+        hs_lastcast=-HS_COOLDOWN,
+        bs_lastcast=-STEP_COOLDOWN,
+        qs_lastcast=-STEP_COOLDOWN
+    },
+    {
+        name='slowpoke',
+        engage=false,
+        follow=false,
+        hs_enabled=false,
+        bs_enabled=false,
+        qs_enabled=false,
+        lastTarget=0,
+        engaged=false,
+        lastEngageTime=0,
+        currentFollowState=nil,
+        partyIndex=nil,
+        retry=nil,
+        hs_lastcast=-HS_COOLDOWN,
+        bs_lastcast=-STEP_COOLDOWN,
+        qs_lastcast=-STEP_COOLDOWN
+    },
+    {
+        name='goomy',
+        engage=false,
+        follow=false,
+        hs_enabled=false,
+        bs_enabled=false,
+        qs_enabled=false,
+        lastTarget=0,
+        engaged=false,
+        lastEngageTime=0,
+        currentFollowState=nil,
+        partyIndex=nil,
+        retry=nil,
+        hs_lastcast=-HS_COOLDOWN,
+        bs_lastcast=-STEP_COOLDOWN,
+        qs_lastcast=-STEP_COOLDOWN
     },
 }
 
 local mm = AshitaCore:GetMemoryManager()
-local qcmd = function(cmd) AshitaCore:GetChatManager():QueueCommand(1, cmd) end
+local qcmd = function(cmd)
+    AshitaCore:GetChatManager():QueueCommand(1, cmd)
+end
 
 ------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------
 local function debugLog(msg)
     if DEBUG then print(msg) end
-end
-
--- Safe disengage: only sends /attack off if mule is actually engaged
-local function disengage(c)
-    if not c.partyIndex then
-        c.lastTarget = 0
-        c.engaged = false
-        c.lastEngageTime = 0
-        return
-    end
-
-    local party = mm:GetParty()
-    local ent = mm:GetEntity()
-    if not party or not ent then
-        c.lastTarget = 0
-        c.engaged = false
-        c.lastEngageTime = 0
-        return
-    end
-
-    local idx = party:GetMemberTargetIndex(c.partyIndex)
-    if idx and idx > 0 then
-        local status = ent:GetStatus(idx)
-        if status == 1 then
-            local cmd = string.format('/mst %s /attack off', c.name)
-            qcmd(cmd)
-            if queueRetry then
-                pcall(function() queueRetry(c, cmd) end)
-            end
-            debugLog(c.name .. ' forced disengage')
-        end
-    end
-
-    c.lastTarget = 0
-    c.engaged = false
-    c.lastEngageTime = 0
 end
 
 local function setFollow(c, state)
@@ -86,26 +98,32 @@ local function setFollow(c, state)
     end
 end
 
-local function getPlayerInfo()
-    if not mm then return { status = 0, target = 0 } end
-    local ent = mm:GetEntity()
-    local targ = mm:GetTarget()
-    if not ent or not targ then return { status = 0, target = 0 } end
+local function disengage(c)
+    if not c.partyIndex then return end
 
-    local selfIdx = mm:GetParty() and mm:GetParty():GetMemberTargetIndex(0) or 0
-    local status = (selfIdx and selfIdx > 0) and ent:GetStatus(selfIdx) or 0
+    local party = mm:GetParty()
+    local ent   = mm:GetEntity()
+    if not party or not ent then return end
 
-    local ok, tIdx = pcall(function() return targ:GetTargetIndex(0) end)
-    local target = (ok and tIdx and tIdx > 0) and tIdx or 0
+    local idx = party:GetMemberTargetIndex(c.partyIndex)
+    if idx and idx > 0 then
+        local status = ent:GetStatus(idx)
+        if status == 1 then
+            local cmd = string.format('/mst %s /attack off', c.name)
+            qcmd(cmd)
+            debugLog(c.name .. ' disengaged')
+        end
+    end
 
-    return { status = status, target = target }
+    c.lastTarget = 0
+    c.engaged = false
+    c.lastEngageTime = 0
 end
 
--- Alliance-aware: search all 18 slots
 local function updatePartyIndex(c)
     local party = mm:GetParty()
     if not party then return nil end
-    for idx = 0, 17 do
+    for idx=0,17 do
         local member = party:GetMemberName(idx)
         if member and member:lower() == c.name:lower() then
             return idx
@@ -114,15 +132,34 @@ local function updatePartyIndex(c)
     return nil
 end
 
+local function getPlayerInfo()
+    local ent  = mm:GetEntity()
+    local targ = mm:GetTarget()
+    if not ent or not targ then return {status=0, target=0} end
+
+    local party   = mm:GetParty()
+    local selfIdx = party and party:GetMemberTargetIndex(0) or 0
+    local status  = (selfIdx > 0) and ent:GetStatus(selfIdx) or 0
+
+    local ok, tIdx = pcall(function() return targ:GetTargetIndex(0) end)
+    local target = (ok and tIdx and tIdx > 0) and tIdx or 0
+
+    return {status=status, target=target}
+end
+
 local function hasBuff(buffId, partyIndex)
     if not mm or not partyIndex then return false end
+
     local party = mm:GetParty()
     if not party then return false end
+
     local success, buffs = pcall(function() return party:GetMemberBuffs(partyIndex) end)
     if not success or not buffs then return false end
+
     for _, b in ipairs(buffs) do
         if b == buffId then return true end
     end
+
     return false
 end
 
@@ -138,25 +175,28 @@ local function processRetry(c)
 end
 
 local function handleAction(c, ability, enabledFlag, tpThreshold, lastcastField, checkBuff)
-    if enabledFlag and c.engaged then
-        local party = mm:GetParty()
-        if not party or not c.partyIndex then return end
+    if not enabledFlag or not c.engaged or not c.partyIndex then return end
 
-        local muleTP = 0
-        local ok, tp = pcall(function() return party:GetMemberTP(c.partyIndex) end)
-        muleTP = (ok and tp) or 0
+    local party = mm:GetParty()
+    if not party then return end
 
-        local last = c[lastcastField] or -STEP_COOLDOWN
-        local now = os.clock()
-        if muleTP >= tpThreshold and (now - last) >= (ability == "Haste Samba" and HS_COOLDOWN or STEP_COOLDOWN) then
-            if ability == "Haste Samba" and checkBuff and hasBuff(370, c.partyIndex) then return end
-            local cmd = string.format('/mst %s /ja "%s" <t>', c.name, ability)
-            if ability == "Haste Samba" then cmd = string.format('/mst %s /ja "%s" <me>', c.name, ability) end
-            qcmd(cmd)
-            queueRetry(c, cmd)
-            c[lastcastField] = now
-            debugLog(c.name .. ' used ' .. ability .. ' (TP='..muleTP..')')
+    local ok, tp = pcall(function() return party:GetMemberTP(c.partyIndex) end)
+    local muleTP = (ok and tp) or 0
+    local last    = c[lastcastField] or -STEP_COOLDOWN
+    local now     = os.clock()
+
+    if muleTP >= tpThreshold and (now - last) >= (ability == "Haste Samba" and HS_COOLDOWN or STEP_COOLDOWN) then
+        if ability == "Haste Samba" and checkBuff and hasBuff(370, c.partyIndex) then return end
+
+        local cmd = string.format('/mst %s /ja "%s" <t>', c.name, ability)
+        if ability == "Haste Samba" then
+            cmd = string.format('/mst %s /ja "%s" <me>', c.name, ability)
         end
+
+        qcmd(cmd)
+        queueRetry(c, cmd)
+        c[lastcastField] = now
+        debugLog(c.name .. ' used ' .. ability .. ' (TP='..muleTP..')')
     end
 end
 
@@ -164,71 +204,58 @@ end
 -- Main Loop
 ------------------------------------------------------------
 ashita.events.register('d3d_present', 'sync_main_loop', function()
-    if not enabled then return end
-    local info = getPlayerInfo()
-    local playerEngaged = (info.status == 1)
-    local playerTarget = info.target
-    local engageCommands = {}
+    -- Throttle only the logic part
+    local now = os.clock()
+    if now - lastTick >= TICK_INTERVAL then
+        lastTick = now
 
-    -- NEW: get leader HP
-    local party = mm:GetParty()
-    local ent = mm:GetEntity()
-    local selfIdx = party and party:GetMemberTargetIndex(0) or 0
-    local leaderHP = (selfIdx > 0 and ent) and ent:GetHPPercent(selfIdx) or 100
+        local info         = getPlayerInfo()
+        local playerEngaged = (info.status == 1)
+        local playerTarget  = info.target
 
-    for _, c in ipairs(chars) do
-        c.partyIndex = updatePartyIndex(c)
-        if not c.partyIndex then
-            debugLog(c.name .. ' is out of zone, skipping')
-            goto continue
+        local party = mm:GetParty()
+        local ent   = mm:GetEntity()
+        local leaderHP = 100
+        if party and ent then
+            local selfIdx = party:GetMemberTargetIndex(0)
+            if selfIdx and selfIdx > 0 then leaderHP = ent:GetHPPercent(selfIdx) end
         end
 
-        setFollow(c, c.follow)
+        for _, c in ipairs(chars) do
+            c.partyIndex = updatePartyIndex(c)
 
-        -- Only disengage if leader is alive but disengaged
-        if not playerEngaged and leaderHP > 0 then
-            disengage(c)
-        end
+            if not c.partyIndex then
+                debugLog(c.name .. ' is out of zone or not in party')
+            else
+                setFollow(c, c.follow)
 
-        if playerEngaged and c.engage then
-            local masterTargetValid = playerTarget ~= 0
-            local lostTarget = c.lastTarget ~= playerTarget
-            local now = os.clock()
-            if (lostTarget and masterTargetValid) or not c.engaged or (now - (c.lastEngageTime or 0) >= LOST_TARGET_INTERVAL) then
-                -- Only queue engage if in same zone (partyIndex valid)
-                local cmd = string.format('/mst %s /attack [t]', c.name)
-                table.insert(engageCommands, cmd)
-                queueRetry(c, cmd)
-                c.lastTarget = playerTarget
-                c.engaged = true
-                c.lastEngageTime = now
-                debugLog(c.name .. ' engage triggered')
+                -- Engage/disengage logic
+                if not playerEngaged and leaderHP > 0 then
+                    disengage(c)
+                elseif playerEngaged and c.engage then
+                    if c.lastTarget ~= playerTarget or not c.engaged then
+                        qcmd(string.format('/mst %s /attack [t]', c.name))
+                        c.lastTarget = playerTarget
+                        c.engaged = true
+                        c.lastEngageTime = os.clock()
+                        debugLog(c.name .. ' engaged')
+                    end
+                elseif not c.engage and c.engaged then
+                    disengage(c)
+                end
+
+                -- TP abilities
+                handleAction(c, "Haste Samba", c.hs_enabled, HS_TP_THRESHOLD, "hs_lastcast", true)
+                handleAction(c, "Box Step", c.bs_enabled, STEP_TP_THRESHOLD, "bs_lastcast", false)
+                handleAction(c, "Quick Step", c.qs_enabled, STEP_TP_THRESHOLD, "qs_lastcast", false)
+
+                -- Retry queued commands
+                processRetry(c)
             end
-        elseif not c.engage and c.engaged then
-            disengage(c)
         end
-
-        local muleTP = 0
-        if party and c.partyIndex then
-            local ok, tp = pcall(function() return party:GetMemberTP(c.partyIndex) end)
-            muleTP = (ok and tp) or 0
-        end
-
-        local inCombat = muleTP > 0
-        if inCombat then
-            handleAction(c, "Haste Samba", c.hs_enabled, HS_TP_THRESHOLD, "hs_lastcast", true)
-            handleAction(c, "Box Step",   c.bs_enabled, STEP_TP_THRESHOLD, "bs_lastcast", false)
-            handleAction(c, "Quick Step", c.qs_enabled, STEP_TP_THRESHOLD, "qs_lastcast", false)
-        end
-
-        processRetry(c)
-        ::continue::
     end
 
-    for _, cmd in ipairs(engageCommands) do
-        qcmd(cmd)
-    end
-
+    -- UI rendering happens every frame (outside throttle)
     if ui_open[1] and imgui.Begin('Sync##sync', ui_open, ImGuiWindowFlags_AlwaysAutoResize) then
         for i, c in ipairs(chars) do
             imgui.PushID(i)
@@ -239,31 +266,26 @@ ashita.events.register('d3d_present', 'sync_main_loop', function()
                 c.follow = cb_follow[1]
                 setFollow(c, c.follow)
             end
-            imgui.SameLine()
 
+            imgui.SameLine()
             local cb_engage = { c.engage }
             if imgui.Checkbox('E##'..i, cb_engage) then
+                local wasEngaged = c.engage
                 c.engage = cb_engage[1]
-                disengage(c)
+                if not c.engage and wasEngaged then disengage(c) end
             end
-            imgui.SameLine()
 
+            imgui.SameLine()
             local cb_hs = { c.hs_enabled }
-            if imgui.Checkbox('HS##'..i, cb_hs) then
-                c.hs_enabled = cb_hs[1]
-            end
-            imgui.SameLine()
+            if imgui.Checkbox('HS##'..i, cb_hs) then c.hs_enabled = cb_hs[1] end
 
+            imgui.SameLine()
             local cb_bs = { c.bs_enabled }
-            if imgui.Checkbox('BS##'..i, cb_bs) then
-                c.bs_enabled = cb_bs[1]
-            end
-            imgui.SameLine()
+            if imgui.Checkbox('BS##'..i, cb_bs) then c.bs_enabled = cb_bs[1] end
 
+            imgui.SameLine()
             local cb_qs = { c.qs_enabled }
-            if imgui.Checkbox('QS##'..i, cb_qs) then
-                c.qs_enabled = cb_qs[1]
-            end
+            if imgui.Checkbox('QS##'..i, cb_qs) then c.qs_enabled = cb_qs[1] end
 
             imgui.PopID()
         end
