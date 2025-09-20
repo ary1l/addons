@@ -1,7 +1,7 @@
 -- sync
 addon.name    = 'sync'
 addon.author  = 'aryl'
-addon.version = '7.68-clean'
+addon.version = '.9'
 addon.desc    = 'Alliance-safe Engage/Follow sync (zone-aware, CPU-optimized)'
 
 require('common')
@@ -213,3 +213,4 @@ end)
 ashita.events.register('load','sync_load',function()
     qcmd('/ms followme on')
 end)
+
