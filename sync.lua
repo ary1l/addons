@@ -20,7 +20,7 @@ local STEP_TP_THRESHOLD = 100
 local STEP_COOLDOWN     = 6
 local LOST_TARGET_INTERVAL = 3.0
 local RETRY_DELAY          = 0.7
-local TICK_INTERVAL        = 0.3   -- throttled for CPU efficiency
+local TICK_INTERVAL        = 0.3   
 local lastTick = 0
 
 local chars = {
@@ -213,3 +213,4 @@ end)
 ashita.events.register('load','sync_load',function()
     qcmd('/ms followme on')
 end)
+
