@@ -1,8 +1,8 @@
 -- sync
 addon.name    = 'sync'
 addon.author  = 'aryl'
-addon.version = '0.1'
-addon.desc    = 'Alliance-safe Engage/Follow sync'
+addon.version = '0.2'
+addon.desc    = 'Alliance-safe Engage/Follow sync (zone-aware, CPU-optimized)'
 
 require('common')
 local imgui = require('imgui')
@@ -20,7 +20,7 @@ local STEP_TP_THRESHOLD = 100
 local STEP_COOLDOWN     = 6
 local LOST_TARGET_INTERVAL = 3.0
 local RETRY_DELAY          = 0.7
-local TICK_INTERVAL        = 0.3   
+local TICK_INTERVAL        = 0.3   -- throttled for CPU efficiency
 local lastTick = 0
 
 local chars = {
@@ -133,16 +133,16 @@ ashita.events.register('d3d_present', 'sync_main_loop', function()
             local muleZone = party:GetMemberZone(c.partyIndex)
             setFollow(c, c.follow)
             if muleZone == playerZone then
-                if not playerEngaged and leaderHP>0 then disengage(c, party, ent)
+                if not playerEngaged and leaderHP>0 then 
+                    disengage(c, party, ent)
                 elseif playerEngaged and c.engage then
                     if c.lastTarget~=playerTarget or not c.engaged then
                         qcmd(string.format('/mst %s /attack [t]', c.name))
                         c.lastTarget = playerTarget; c.engaged=true; c.lastEngageTime=now
                         debugLog(c.name..' engaged')
                     end
-                elseif not c.engage and c.engaged then
-                    disengage(c, party, ent)
                 end
+                -- Note: if c.engage is false, we do nothing (manual control allowed)
                 handleAction(c,"Haste Samba",c.hs_enabled,HS_TP_THRESHOLD,"hs_lastcast",true,party,now,playerZone)
                 handleAction(c,"Box Step",c.bs_enabled,STEP_TP_THRESHOLD,"bs_lastcast",false,party,now,playerZone)
                 handleAction(c,"Quick Step",c.qs_enabled,STEP_TP_THRESHOLD,"qs_lastcast",false,party,now,playerZone)
@@ -173,9 +173,8 @@ ashita.events.register('d3d_present', 'sync_ui_render', function()
             imgui.SameLine()
             tmp={cb.engage}
             if imgui.Checkbox('E##'..i,tmp) then
-                local wasEngaged=c.engage
                 cb.engage=tmp[1]; c.engage=cb.engage
-                if not c.engage and wasEngaged then disengage(c, mm:GetParty(), mm:GetEntity()) end
+                -- no auto-disengage here; leaving mule untouched if unchecked
             end
 
             imgui.SameLine()
@@ -213,4 +212,3 @@ end)
 ashita.events.register('load','sync_load',function()
     qcmd('/ms followme on')
 end)
-
