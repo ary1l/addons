@@ -1,8 +1,8 @@
 -- sync
 addon.name    = 'sync'
 addon.author  = 'aryl'
-addon.version = '0.2'
-addon.desc    = 'Alliance-safe Engage/Follow sync (zone-aware, CPU-optimized)'
+addon.version = '0.3'
+addon.desc    = 'Alliance-safe Engage/Follow sync'
 
 require('common')
 local imgui = require('imgui')
@@ -20,13 +20,20 @@ local STEP_TP_THRESHOLD = 100
 local STEP_COOLDOWN     = 6
 local LOST_TARGET_INTERVAL = 3.0
 local RETRY_DELAY          = 0.7
-local TICK_INTERVAL        = 0.3   -- throttled for CPU efficiency
+local TICK_INTERVAL        = 0.3
+local ENGAGE_RETRY_GAP     = 0.5 -- min gap between engage attempts
 local lastTick = 0
 
 local chars = {
-    { name='', engage=false, follow=false, hs_enabled=false, bs_enabled=false, qs_enabled=false, lastTarget=0, engaged=false, lastEngageTime=0, currentFollowState=nil, partyIndex=nil, retry=nil, hs_lastcast=-HS_COOLDOWN, bs_lastcast=-STEP_COOLDOWN, qs_lastcast=-STEP_COOLDOWN },
-    { name='', engage=false, follow=false, hs_enabled=false, bs_enabled=false, qs_enabled=false, lastTarget=0, engaged=false, lastEngageTime=0, currentFollowState=nil, partyIndex=nil, retry=nil, hs_lastcast=-HS_COOLDOWN, bs_lastcast=-STEP_COOLDOWN, qs_lastcast=-STEP_COOLDOWN },
-    { name='', engage=false, follow=false, hs_enabled=false, bs_enabled=false, qs_enabled=false, lastTarget=0, engaged=false, lastEngageTime=0, currentFollowState=nil, partyIndex=nil, retry=nil, hs_lastcast=-HS_COOLDOWN, bs_lastcast=-STEP_COOLDOWN, qs_lastcast=-STEP_COOLDOWN },
+    { name='muunch', engage=false, follow=false, hs_enabled=false, bs_enabled=false, qs_enabled=false,
+      lastTarget=0, engaged=false, lastEngageTime=0, currentFollowState=nil, partyIndex=nil, retry=nil,
+      hs_lastcast=-HS_COOLDOWN, bs_lastcast=-STEP_COOLDOWN, qs_lastcast=-STEP_COOLDOWN, autoEngaged=false },
+    { name='slowpoke', engage=false, follow=false, hs_enabled=false, bs_enabled=false, qs_enabled=false,
+      lastTarget=0, engaged=false, lastEngageTime=0, currentFollowState=nil, partyIndex=nil, retry=nil,
+      hs_lastcast=-HS_COOLDOWN, bs_lastcast=-STEP_COOLDOWN, qs_lastcast=-STEP_COOLDOWN, autoEngaged=false },
+    { name='goomy', engage=false, follow=false, hs_enabled=false, bs_enabled=false, qs_enabled=false,
+      lastTarget=0, engaged=false, lastEngageTime=0, currentFollowState=nil, partyIndex=nil, retry=nil,
+      hs_lastcast=-HS_COOLDOWN, bs_lastcast=-STEP_COOLDOWN, qs_lastcast=-STEP_COOLDOWN, autoEngaged=false },
 }
 
 local uiState = {}
@@ -41,7 +48,7 @@ local qcmd = function(cmd) AshitaCore:GetChatManager():QueueCommand(1, cmd) end
 ------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------
-local function debugLog(msg) if DEBUG then print(msg) end end
+local function debugLog(msg) if DEBUG then print('[sync] ' .. msg) end end
 
 local function setFollow(c, state)
     if c.currentFollowState ~= state then
@@ -56,9 +63,12 @@ local function disengage(c, party, ent)
     local idx = party:GetMemberTargetIndex(c.partyIndex)
     if idx and idx > 0 and ent:GetStatus(idx) == 1 then
         qcmd(string.format('/mst %s /attack off', c.name))
-        debugLog(c.name .. ' disengaged')
+        debugLog(c.name .. ' disengaged (auto)')
     end
-    c.lastTarget = 0; c.engaged = false; c.lastEngageTime = 0
+    c.lastTarget = 0
+    c.autoEngaged = false
+    -- don’t overwrite c.engaged here; manual engage should persist
+    c.lastEngageTime = 0
 end
 
 local function updatePartyIndex(c, party)
@@ -88,7 +98,21 @@ local function hasBuff(buffId, party, partyIndex)
 end
 
 local function queueRetry(c, cmd, now) c.retry = { cmd=cmd, time=now+RETRY_DELAY } end
-local function processRetry(c, now) if c.retry and now>=c.retry.time then qcmd(c.retry.cmd); c.retry=nil end end
+local function processRetry(c, now, party, ent)
+    if c.retry and now>=c.retry.time then
+        if c.retry.cmd:find('/attack') then
+            local idx = party and party:GetMemberTargetIndex(c.partyIndex) or nil
+            local status = (idx and idx>0 and ent) and ent:GetStatus(idx) or 0
+            if status ~= 1 then
+                qcmd(c.retry.cmd)
+                debugLog(c.name .. ' retry engage')
+            end
+        else
+            qcmd(c.retry.cmd)
+        end
+        c.retry=nil
+    end
+end
 
 local function handleAction(c, ability, enabled, tpThreshold, lastcastField, checkBuff, party, now, playerZone)
     if not enabled or not c.engaged or not c.partyIndex or not party then return end
@@ -130,30 +154,47 @@ ashita.events.register('d3d_present', 'sync_main_loop', function()
     for _, c in ipairs(chars) do
         c.partyIndex = updatePartyIndex(c, party)
         if c.partyIndex then
+            -- update mule's engaged state from entity status
+            local idx = party:GetMemberTargetIndex(c.partyIndex)
+            local status = (idx and idx > 0 and ent) and ent:GetStatus(idx) or 0
+            c.engaged = (status == 1)
+
             local muleZone = party:GetMemberZone(c.partyIndex)
             setFollow(c, c.follow)
+
             if muleZone == playerZone then
-                if not playerEngaged and leaderHP>0 then 
-                    disengage(c, party, ent)
-                elseif playerEngaged and c.engage then
-                    if c.lastTarget~=playerTarget or not c.engaged then
-                        qcmd(string.format('/mst %s /attack [t]', c.name))
-                        c.lastTarget = playerTarget; c.engaged=true; c.lastEngageTime=now
-                        debugLog(c.name..' engaged')
+                if not playerEngaged and leaderHP > 0 then
+                    -- only disengage if this engage was triggered by sync
+                    if c.autoEngaged then
+                        disengage(c, party, ent)
                     end
+                elseif playerEngaged and c.engage then
+                    local timeSince = now - (c.lastEngageTime or 0)
+                    if (c.lastTarget ~= playerTarget or not c.engaged) and timeSince >= ENGAGE_RETRY_GAP then
+                        local cmd = string.format('/mst %s /attack [t]', c.name)
+                        qcmd(cmd)
+                        queueRetry(c, cmd, now)
+                        c.lastTarget = playerTarget
+                        c.autoEngaged = true  -- addon triggered
+                        c.lastEngageTime = now
+                        debugLog(c.name..' engage attempt (auto)')
+                    end
+                else
+                    -- clear auto flag if not syncing engage
+                    c.autoEngaged = false
                 end
-                -- Note: if c.engage is false, we do nothing (manual control allowed)
+
                 handleAction(c,"Haste Samba",c.hs_enabled,HS_TP_THRESHOLD,"hs_lastcast",true,party,now,playerZone)
                 handleAction(c,"Box Step",c.bs_enabled,STEP_TP_THRESHOLD,"bs_lastcast",false,party,now,playerZone)
                 handleAction(c,"Quick Step",c.qs_enabled,STEP_TP_THRESHOLD,"qs_lastcast",false,party,now,playerZone)
             end
-            processRetry(c, now)
+            processRetry(c, now, party, ent)
         end
     end
 end)
 
 ------------------------------------------------------------
--- UI (flicker-free)
+-- UI
 ------------------------------------------------------------
 ashita.events.register('d3d_present', 'sync_ui_render', function()
     if not ui_open[1] then return end
@@ -174,7 +215,6 @@ ashita.events.register('d3d_present', 'sync_ui_render', function()
             tmp={cb.engage}
             if imgui.Checkbox('E##'..i,tmp) then
                 cb.engage=tmp[1]; c.engage=cb.engage
-                -- no auto-disengage here; leaving mule untouched if unchecked
             end
 
             imgui.SameLine()
@@ -207,9 +247,8 @@ ashita.events.register('command', 'command_cb', function(e)
 end)
 
 ------------------------------------------------------------
--- On Load: Auto-followme
+-- On Load
 ------------------------------------------------------------
 ashita.events.register('load','sync_load',function()
     qcmd('/ms followme on')
 end)
-
